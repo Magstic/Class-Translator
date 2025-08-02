@@ -1,0 +1,17 @@
+{
+    "split_chars": [
+        ";",
+        "|"
+    ],
+    "prefix_chars": [
+        "-"
+    ],
+    "text_file_extensions": [
+        ".t",
+        ".txt",
+        ".text"
+    ],
+    "class_file_extensions": [
+        ".class"
+    ]
+}

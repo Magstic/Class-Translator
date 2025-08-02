@@ -1,0 +1,369 @@
+import os
+import logging
+import re
+from typing import Dict, List
+
+from core.services import FileService, TranslationService, HighlightingService, ProjectService
+from core.models import StringEntry
+from .interfaces import IMainView
+
+class MainPresenter:
+    def __init__(self, view: IMainView, file_service: FileService, translation_service: TranslationService, highlighting_service: HighlightingService, project_service: ProjectService):
+        self.view = view
+        self.file_service = file_service
+        self.translation_service = translation_service
+        self.highlighting_service = highlighting_service
+        self.project_service = project_service
+        self.open_files_data: Dict[str, List[StringEntry]] = {}
+
+    def _get_current_data(self) -> List[StringEntry] | None:
+        filepath = self.view.get_current_filepath()
+        return self.open_files_data.get(filepath)
+
+    def _get_selected_entry(self) -> StringEntry | None:
+        data = self._get_current_data()
+        if not data:
+            return None
+        selected_id = self.view.get_selected_tree_item_id()
+        if selected_id is None:
+            return None
+        return next((entry for entry in data if entry.id == selected_id), None)
+
+    def _get_all_selected_entries(self) -> List[StringEntry]:
+        data = self._get_current_data()
+        if not data:
+            return []
+        selected_ids = self.view.get_all_selected_tree_item_ids()
+        return [entry for entry in data if entry.id in selected_ids]
+
+    def _update_highlights_for_entry(self, filepath: str, entry: StringEntry):
+        if not self.highlighting_service.enabled:
+            self.view.update_text_highlights([])
+            self.view.highlight_tree_row(filepath, entry.id, False)
+            return
+
+        is_valid, ranges = self.highlighting_service.check_text(entry.translated)
+        self.view.update_text_highlights(ranges)
+        self.view.highlight_tree_row(filepath, entry.id, not is_valid)
+
+    def _update_all_highlights_for_current_tab(self):
+        filepath = self.view.get_current_filepath()
+        current_data = self._get_current_data()
+        if not filepath or not current_data:
+            return
+
+        enabled = self.highlighting_service.enabled
+        for entry in current_data:
+            if not enabled:
+                self.view.highlight_tree_row(filepath, entry.id, False)
+            else:
+                is_valid, _ = self.highlighting_service.check_text(entry.translated)
+                self.view.highlight_tree_row(filepath, entry.id, not is_valid)
+
+        selected_entry = self._get_selected_entry()
+        if selected_entry:
+            self._update_highlights_for_entry(filepath, selected_entry)
+        else:
+            self.view.update_text_highlights([])
+
+    def on_load_directory_requested(self):
+        dir_path = self.view.ask_directory(title="選擇包含 Class 文件的目錄")
+        if not dir_path:
+            return
+
+        try:
+            self.view.clear_all_tabs()
+            self.open_files_data = self.file_service.load_directory(dir_path)
+
+            if not self.open_files_data:
+                self.view.show_info_message("未找到文件", "在指定目錄中沒有找到可加載的 .class 或 .t 文件。")
+                return
+
+            for filepath, data in self.open_files_data.items():
+                self.view.add_file_tab(filepath, data)
+            
+            self.on_tab_changed() 
+            self.view.update_status_bar(f"成功從 {dir_path} 加載了 {len(self.open_files_data)} 個文件。")
+        except Exception as e:
+            logging.error(f"Failed to load directory: {e}", exc_info=True)
+            self.view.show_error_message("加載失敗", f"加載目錄時出錯: {e}")
+
+    def on_save_file_requested(self):
+        filepath = self.view.get_current_filepath()
+        data = self._get_current_data()
+
+        if not filepath or not data:
+            self.view.show_warning_message("無數據", "沒有可保存的數據。")
+            return
+
+        try:
+            backup_path, count = self.file_service.save_file(filepath, data)
+            self.view.show_info_message("保存成功", f"文件 '{os.path.basename(filepath)}' 已成功保存！\n共更新 {count} 個字符串。\n備份文件位於: {backup_path}")
+        except Exception as e:
+            logging.error(f"Failed to save file: {e}", exc_info=True)
+            self.view.show_error_message("保存失敗", f"保存文件時出錯: {e}")
+
+    def on_save_all_files_requested(self):
+        if not self.open_files_data:
+            self.view.show_warning_message("無數據", "沒有可保存的數據。")
+            return
+
+        total_updates = 0
+        total_files = 0
+        try:
+            for filepath, data in self.open_files_data.items():
+                _, count = self.file_service.save_file(filepath, data)
+                if count > 0:
+                    total_updates += count
+                    total_files += 1
+            self.view.show_info_message("全部保存成功", f"成功保存 {total_files} 個文件，共更新 {total_updates} 個字符串。")
+        except Exception as e:
+            logging.error(f"Failed to save all files: {e}", exc_info=True)
+            self.view.show_error_message("保存失敗", f"批量保存文件時出錯: {e}")
+
+    def on_tree_selection_changed(self):
+        selected_entry = self._get_selected_entry()
+        filepath = self.view.get_current_filepath()
+
+        if not selected_entry or not filepath:
+            self.view.clear_editor_text()
+            self.view.set_apply_button_enabled(False)
+            return
+
+        self.view.update_editor_text(selected_entry.original, selected_entry.translated)
+        self._update_highlights_for_entry(filepath, selected_entry)
+        self.view.set_editor_modified_flag(False)
+        self.view.set_apply_button_enabled(False)
+
+    def on_apply_changes_requested(self):
+        selected_entry = self._get_selected_entry()
+        filepath = self.view.get_current_filepath()
+        if not selected_entry or not filepath:
+            return
+
+        new_text = self.view.get_translated_text()
+        if selected_entry.translated != new_text:
+            selected_entry.translated = new_text
+            self.view.update_tree_item(filepath, selected_entry.id, new_text)
+            self._update_highlights_for_entry(filepath, selected_entry)
+        
+        self.view.set_editor_modified_flag(False)
+
+    def on_translated_text_modified(self):
+        is_modified = self.view.is_editor_modified()
+        self.view.set_apply_button_enabled(is_modified)
+
+    def on_save_project_requested(self):
+        if not self.open_files_data:
+            self.view.show_warning_message("無數據", "沒有可保存的工程數據。")
+            return
+
+        file_path = self.view.ask_save_as_filename(
+            title="保存工程文件",
+            defaultextension=".cep",
+            filetypes=[("Class Editor Projects", "*.cep"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+
+        all_entries = [entry for file_data in self.open_files_data.values() for entry in file_data]
+        success, message = self.project_service.save_project(file_path, all_entries)
+        if success:
+            self.view.show_info_message("工程已保存", message)
+        else:
+            self.view.show_error_message("保存失敗", message)
+
+    def on_load_project_requested(self):
+        file_path = self.view.ask_open_filename(
+            title="加載工程文件",
+            filetypes=[("Class Editor Projects", "*.cep"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+
+        success, data = self.project_service.load_project(file_path)
+        if not success:
+            self.view.show_error_message("加載失敗", data) # data is error message
+            return
+
+        string_data, metadata = data
+        self.view.clear_all_tabs()
+        self.open_files_data.clear()
+
+        for entry in string_data:
+            if entry.file_path not in self.open_files_data:
+                self.open_files_data[entry.file_path] = []
+            self.open_files_data[entry.file_path].append(entry)
+
+        for filepath, file_data in self.open_files_data.items():
+            self.view.add_file_tab(filepath, file_data)
+        
+        self.on_tab_changed()
+        self.view.update_status_bar(f"成功從 {os.path.basename(file_path)} 加載了 {metadata.get('total_entries', 'N/A')} 個條目。")
+        self.view.show_info_message("加載成功", f"工程文件已成功加載。")
+
+    def on_tab_changed(self):
+        self._update_all_highlights_for_current_tab()
+        self.on_tree_selection_changed()
+        has_files = bool(self.open_files_data)
+        self.view.set_save_menu_enabled(has_files)
+        self.view.set_save_all_menu_enabled(has_files)
+        self.view.set_project_menu_enabled(has_files)
+
+    def on_highlight_toggled(self):
+        is_enabled = self.view.is_highlighting_enabled()
+        self.highlighting_service.enabled = is_enabled
+        logging.info(f"Highlighting toggled: {'Enabled' if is_enabled else 'Disabled'}")
+        self._update_all_highlights_for_current_tab()
+
+    def on_translate_requested(self):
+        selected_entry = self._get_selected_entry()
+        filepath = self.view.get_current_filepath()
+        if not selected_entry or not filepath:
+            self.view.show_info_message("無選擇", "請先在列表中選擇一個字符串。")
+            return
+
+        self.view.update_status_bar("正在翻譯...")
+        try:
+            translated_text = self.translation_service.translate(selected_entry.original)
+            selected_entry.translated = translated_text
+            self.view.update_editor_text(selected_entry.original, translated_text)
+            self.view.update_tree_item(filepath, selected_entry.id, translated_text)
+            self._update_highlights_for_entry(filepath, selected_entry)
+            self.view.update_status_bar("翻譯完成。")
+        except Exception as e:
+            logging.error(f"Translation failed: {e}", exc_info=True)
+            self.view.update_status_bar(f"翻譯錯誤: {e}")
+            self.view.show_error_message("翻譯失敗", f"翻譯時出錯: {e}")
+
+    def on_translate_all_requested(self):
+        entries_to_translate = self._get_all_selected_entries()
+        filepath = self.view.get_current_filepath()
+        if not entries_to_translate or not filepath:
+            self.view.show_info_message("無選擇", "請先在列表中選擇一個或多個字符串。")
+            return
+
+        total = len(entries_to_translate)
+        translated_count = 0
+        self.view.update_status_bar(f"開始批量翻譯 {total} 個項目...")
+        self.view.refresh_ui()
+
+        try:
+            for i, entry in enumerate(entries_to_translate):
+                self.view.update_status_bar(f"正在翻譯 ({i + 1}/{total}): {entry.original[:20]}...")
+                if entry.original:
+                    translated_text = self.translation_service.translate(entry.original)
+                    if translated_text != entry.translated:
+                        entry.translated = translated_text
+                        self.view.update_tree_item(filepath, entry.id, translated_text)
+                        translated_count += 1
+                self.view.refresh_ui()
+
+            self._update_all_highlights_for_current_tab()
+            self.view.update_status_bar(f"批量翻譯完成。成功翻譯 {translated_count} 個字符串。")
+            self.view.show_info_message("翻譯完成", f"成功翻譯 {translated_count} 個字符串。")
+
+        except Exception as e:
+            logging.error(f"Batch translation failed: {e}", exc_info=True)
+            self.view.update_status_bar(f"批量翻譯時出錯: {e}")
+            self.view.show_error_message("翻譯失敗", f"批量翻譯時出錯: {e}")
+
+    def on_find_requested(self):
+        current_data = self._get_current_data()
+        filepath = self.view.get_current_filepath()
+        if not current_data or not filepath:
+            self.view.show_info_message("無數據", "沒有可供查找的數據。")
+            return
+
+        params = self.view.show_find_dialog()
+        if not params or not params.get("find_text"):
+            return
+
+        find_text = params['find_text']
+        match_case = params['match_case']
+        search_in = params['search_in']
+
+        flags = 0 if match_case else re.IGNORECASE
+        found_ids = []
+
+        for entry in current_data:
+            targets = []
+            if search_in in ('translated', 'both'): targets.append(entry.translated)
+            if search_in in ('original', 'both'): targets.append(entry.original)
+            
+            if any(re.search(find_text, target_text, flags) for target_text in targets if target_text):
+                found_ids.append(entry.id)
+        
+        if found_ids:
+            self.view.select_tree_items(filepath, found_ids)
+            self.view.update_status_bar(f"找到了 {len(found_ids)} 個匹配項。")
+        else:
+            self.view.update_status_bar(f"未找到 '{find_text}'。")
+
+    def on_find_replace_requested(self):
+        if not self._get_current_data():
+            self.view.show_info_message("無數據", "沒有可供操作的數據。")
+            return
+
+        params = self.view.show_find_replace_dialog()
+        if not params or not params.get("find_text"):
+            return
+
+        action = params['action']
+        find_text = params['find_text']
+        replace_text = params['replace_text']
+        match_case = params['match_case']
+        
+        entries_to_process = []
+        if action == 'replace_all':
+            entries_to_process = self._get_current_data()
+        elif action == 'replace_selection':
+            entries_to_process = self._get_all_selected_entries()
+            if not entries_to_process:
+                self.view.show_info_message("無選擇", "請先在列表中選擇要替換的條目。")
+                return
+
+        count = 0
+        flags = 0 if match_case else re.IGNORECASE
+        filepath = self.view.get_current_filepath()
+        
+        for entry in entries_to_process:
+            new_translated, num_subs = re.subn(find_text, replace_text, entry.translated, flags=flags)
+            if num_subs > 0:
+                count += 1
+                entry.translated = new_translated
+                self.view.update_tree_item(filepath, entry.id, new_translated)
+
+        self.view.update_status_bar(f"在 {len(entries_to_process)} 個條目中，共替換了 {count} 處。")
+        self._update_all_highlights_for_current_tab()
+        self.on_tree_selection_changed() # Refresh editor if needed
+
+    def on_translation_settings_requested(self):
+        self.view.show_translation_settings_dialog()
+
+    def on_about_requested(self):
+        self.view.show_about_dialog()
+                    self.ui.update_status_bar("批量翻譯已終止。")
+                    break
+        
+        self._update_all_highlights_for_current_tab()
+        self.ui.update_status_bar(f"批量翻譯完成 {total} 個項目。")
+
+    def show_translation_settings(self):
+        """Opens a dialog to configure the active translation engine's settings."""
+        rules = self.translation_service.get_active_engine_rules()
+
+        if not rules:
+            messagebox.showinfo("No Settings Available", "The currently selected translation engine has no configurable options.")
+            return
+
+        def save_new_rules(new_rules):
+            self.translation_service.update_active_engine_rules(new_rules)
+            logging.info(f"Updated translation rules: {new_rules}")
+            messagebox.showinfo("Settings Saved", "Translation settings have been updated.")
+
+        SettingsDialog(self.root, rules, save_new_rules)
+
+    def show_about(self):
+        """Shows the about dialog."""
+        messagebox.showinfo("About", "Class Editor\n\n為 STK-MIDP 的漢化而設計。\n使用内建的 Google 翻譯，讓您以更多的精力放在『翻譯的潤色』和『游戲的測試』上。\n\n這個程式使用 Claude 和 Gemini 協作開發，如果您能喜歡，我不勝感激 ^_^\n\n如果您在使用過程中發現任何問題，請告訴我。\n\nEMAIL: magsticwind@gmail.com")

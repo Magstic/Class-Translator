@@ -1,0 +1,119 @@
+import os
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+import collections
+from typing import List, Tuple, Dict, Any
+
+from .interfaces import IMainView
+from .find_dialog import FindDialog
+from .find_replace_dialog import FindReplaceDialog
+from core.services import (FileService, TranslationService, 
+                           HighlightingService, ProjectService)
+from .event_handlers import MainPresenter
+
+class MainWindow(IMainView):
+    """Represents the main window of the application, implementing the IMainView interface."""
+
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.presenter = None  # Will be set by set_presenter
+        self.status_var = tk.StringVar()
+        self.highlight_var = tk.BooleanVar(value=True)
+        self.tabs: Dict[str, Dict[str, Any]] = {}  # Maps filepath to its tab components
+
+    def _initialize_presenter(self):
+        # 服務初始化
+        file_service = FileService()
+        translation_service = TranslationService()
+        highlighting_service = HighlightingService()
+        project_service = ProjectService()
+
+        # Presenter 初始化
+        self.presenter = MainPresenter(
+            view=self,
+            file_service=file_service,
+            translation_service=translation_service,
+            highlighting_service=highlighting_service,
+            project_service=project_service
+        )
+        self._bind_events()
+
+    def _bind_events(self):
+        self.file_menu.add_command(label="打開目錄...", command=self.presenter.on_load_directory_requested)
+        self.file_menu.add_command(label="保存當前文件", command=self.presenter.on_save_file_requested)
+        self.file_menu.add_command(label="全部保存", command=self.presenter.on_save_all_files_requested)
+        self.file_menu.add_command(label="保存工程...", command=self.presenter.on_save_project_requested)
+        self.file_menu.add_command(label="加載工程...", command=self.presenter.on_load_project_requested)
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="退出", command=self.root.quit)
+
+        edit_menu = tk.Menu(self.menubar, tearoff=0)
+        self.menubar.add_cascade(label="编辑", menu=edit_menu)
+
+        edit_menu.add_command(label="查找...", command=self.presenter.on_find_requested)
+        edit_menu.add_separator()
+        edit_menu.add_command(label="查找和替换...", command=self.presenter.on_find_replace_requested)
+
+        options_menu = tk.Menu(self.menubar, tearoff=0)
+        self.menubar.add_cascade(label="选项", menu=options_menu)
+        options_menu.add_command(label="翻译设置...", command=self.presenter.on_translation_settings_requested)
+
+        help_menu = tk.Menu(self.menubar, tearoff=0)
+        self.menubar.add_cascade(label="帮助", menu=help_menu)
+        help_menu.add_command(label="关于", command=self.presenter.on_about_requested)
+
+        self.translate_button.config(command=self.presenter.on_translate_requested)
+        self.apply_button.config(command=self.presenter.on_apply_changes_requested)
+
+        self.highlight_checkbox.config(command=self.presenter.on_highlight_toggled)
+
+        self.notebook.bind("<<NotebookTabChanged>>", self.presenter.on_tab_changed)
+        self.translated_text.bind('<<Modified>>', self.presenter.on_translated_text_modified)
+
+    def setup_ui(self):
+        self._create_menu_bar()
+        self._create_main_layout()
+        self._create_status_bar()
+        self.disable_file_operations() # Start in a disabled state
+        self._initialize_presenter()
+
+    # ... rest of your code remains the same ...
+
+    def show_warning_message(self, title: str, message: str):
+        messagebox.showwarning(title, message)
+
+    def show_error_message(self, title: str, message: str):
+        messagebox.showerror(title, message)
+
+    def ask_directory(self, title: str) -> str | None:
+        return filedialog.askdirectory(title=title)
+
+    def ask_save_as_filename(self, title: str, defaultextension: str, filetypes: List[Tuple[str, str]]) -> str | None:
+        return filedialog.asksaveasfilename(
+            title=title,
+            defaultextension=defaultextension,
+            filetypes=filetypes
+        )
+
+    def ask_open_filename(self, title: str, filetypes: List[Tuple[str, str]]) -> str | None:
+        return filedialog.askopenfilename(title=title, filetypes=filetypes)
+
+    def show_find_dialog(self) -> Dict[str, Any] | None:
+        dialog = FindDialog(self.root)
+        return dialog.result
+
+    def show_find_replace_dialog(self) -> Dict[str, Any] | None:
+        dialog = FindReplaceDialog(self.root)
+        return dialog.result
+
+    def show_about_dialog(self):
+        messagebox.showinfo("關於", "CLASS 編輯器\n版本 2.0 (MVP 架構)\n一個用於編輯 .class 文件的工具。")
+
+    def show_translation_settings_dialog(self):
+        messagebox.showinfo("未實現", "翻譯設置功能尚未實現。")
+
+    def refresh_ui(self):
+        self.root.update_idletasks()
+
+    def mainloop(self):
+        self.root.mainloop()

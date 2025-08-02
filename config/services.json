@@ -1,0 +1,139 @@
+{
+  "auto_registration": true,
+  "circular_dependency_detection": true,
+  "lifecycle_management": true,
+  "logging_level": "INFO",
+  "validation_enabled": true,
+  "services": [
+    {
+      "name": "FileService",
+      "implementation": "core.services.file_service.FileService",
+      "scope": "singleton",
+      "service_type": "class",
+      "dependencies": [],
+      "parameters": {},
+      "interfaces": ["core.services.file_service.IFileService"],
+      "enabled": true,
+      "priority": 100,
+      "tags": ["core", "service", "file"]
+    },
+    {
+      "name": "TranslationService",
+      "implementation": "core.services.translation_service.TranslationService",
+      "scope": "singleton",
+      "service_type": "class",
+      "dependencies": [],
+      "parameters": {
+        "max_concurrent_requests": 3
+      },
+      "interfaces": ["core.services.translation_service.ITranslationService"],
+      "enabled": true,
+      "priority": 90,
+      "tags": ["core", "service", "translation"]
+    },
+    {
+      "name": "HighlightingService",
+      "implementation": "core.services.highlighting_service.HighlightingService",
+      "scope": "singleton",
+      "service_type": "class",
+      "dependencies": [],
+      "parameters": {
+        "enabled": true
+      },
+      "interfaces": ["core.services.highlighting_service.IHighlightingService"],
+      "enabled": true,
+      "priority": 80,
+      "tags": ["core", "service", "highlighting"]
+    },
+    {
+      "name": "ProjectService",
+      "implementation": "core.services.project_service.ProjectService",
+      "scope": "singleton",
+      "service_type": "class",
+      "dependencies": [],
+      "parameters": {},
+      "interfaces": ["core.services.project_service.IProjectService"],
+      "enabled": true,
+      "priority": 70,
+      "tags": ["core", "service", "project"]
+    },
+    {
+      "name": "AppStateManager",
+      "implementation": "core.state.app_state_manager.AppStateManager",
+      "scope": "singleton",
+      "service_type": "class",
+      "dependencies": [],
+      "parameters": {},
+      "interfaces": [],
+      "enabled": true,
+      "priority": 60,
+      "tags": ["core", "state", "manager"]
+    },
+    {
+      "name": "MainWindow",
+      "implementation": "ui.main_window.MainWindow",
+      "scope": "singleton",
+      "service_type": "class",
+      "dependencies": [
+        {
+          "name": "root",
+          "type": "tkinter.Tk",
+          "optional": false
+        }
+      ],
+      "parameters": {},
+      "interfaces": ["ui.interfaces.IMainWindow"],
+      "enabled": true,
+      "priority": 50,
+      "tags": ["ui", "window", "main"]
+    },
+    {
+      "name": "EventHandlers",
+      "implementation": "ui.event_handlers.EventHandlers",
+      "scope": "singleton",
+      "service_type": "class",
+      "dependencies": [
+        {
+          "name": "root",
+          "type": "tkinter.Tk",
+          "optional": false
+        },
+        {
+          "name": "ui",
+          "type": "ui.main_window.MainWindow",
+          "optional": false
+        },
+        {
+          "name": "state_manager",
+          "type": "core.state.app_state_manager.AppStateManager",
+          "optional": false
+        },
+        {
+          "name": "file_service",
+          "type": "core.services.file_service.FileService",
+          "optional": false
+        },
+        {
+          "name": "translation_service",
+          "type": "core.services.translation_service.TranslationService",
+          "optional": false
+        },
+        {
+          "name": "highlighting_service",
+          "type": "core.services.highlighting_service.HighlightingService",
+          "optional": false
+        },
+        {
+          "name": "project_service",
+          "type": "core.services.project_service.ProjectService",
+          "optional": false
+        }
+      ],
+      "parameters": {},
+      "interfaces": [],
+      "enabled": true,
+      "priority": 10,
+      "tags": ["ui", "handlers", "events"]
+    }
+  ]
+}
